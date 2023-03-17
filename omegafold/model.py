@@ -93,21 +93,21 @@ class OmegaFoldCycle(modules.OFModule):
             fwd_cfg=fwd_cfg
         )
 
-        node_repr, ret = self.structure_module(
+        node_repr_struct, ret = self.structure_module(
             node_repr=node_repr[..., 0, :, :],
             edge_repr=edge_repr,
             fasta=fasta,
             mask=mask[..., 0, :],
         )
 
-        ret['confidence'] = self.confidence_head(node_repr)
+        ret['confidence'] = self.confidence_head(node_repr_struct)
 
         prev_dict = {
             'prev_node': prev_node[..., 0, :, :],
             'prev_edge': edge_repr,
             'prev_x': ret['final_atom_positions'],
         }
-        return ret, prev_dict
+        return ret, prev_dict, edge_repr, prev_node[..., 0, :, :] #node_repr[..., 0, :, :]
 
 
 _INPUTS = typing.List[typing.Dict[typing.Union[str, int], typing.Any]]
@@ -153,6 +153,8 @@ class OmegaFold(modules.OFModule):
         max_confidence = 0
         prev_dict = self.create_initial_prev_dict(len(primary_sequence))
         final_result = None
+        final_edge_repr = None
+        final_node_repr = None
 
         # Start cycling
         for cycle_data in inputs:
@@ -163,6 +165,10 @@ class OmegaFold(modules.OFModule):
                 p_msa_mask,
                 fwd_cfg
             )
+            
+            #return node_repr, edge_repr
+      
+            
             node_recycle, edge_repr = self.recycle_embedder(
                 fasta=fasta,
                 prev_node=prev_dict.pop('prev_node'),
@@ -172,7 +178,7 @@ class OmegaFold(modules.OFModule):
                 edge_repr=edge_repr,
             )
 
-            result, prev_dict = self.omega_fold_cycle(
+            result, prev_dict, edge_repr, node_repr = self.omega_fold_cycle(
                 fasta=fasta,
                 mask=p_msa_mask,
                 node_repr=node_repr,
@@ -190,10 +196,14 @@ class OmegaFold(modules.OFModule):
                 if confidence_overall > max_confidence:
                     max_confidence = confidence_overall
                     final_result = result
+                    final_edge_repr = edge_repr
+                    final_node_repr = node_repr
             else:
                 final_result = result
+                final_edge_repr = edge_repr
+                final_node_repr = node_repr
 
-        return final_result
+        return final_edge_repr, final_node_repr
 
     def deep_sequence_embed(
             self,
@@ -211,9 +221,12 @@ class OmegaFold(modules.OFModule):
         Returns:
 
         """
+        
         node_repr, edge_repr = self.omega_plm(
             fasta, mask, fwd_cfg=fwd_cfg
         )
+        #return node_repr.mean(0), edge_repr.permute(1, 2, 0)
+        
         # return node_plm, edge_plm
         node_repr = self.plm_node_embedder(
             utils.normalize(node_repr, in_place=True)

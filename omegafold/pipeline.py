@@ -90,8 +90,7 @@ def path_leaf(path: str) -> str:
 
 
 def fasta2inputs(
-        fasta_path: str,
-        output_dir: typing.Optional[str] = None,
+        fasta_lines,
         num_pseudo_msa: int = 15,
         device: typing.Optional[torch.device] = torch.device('cpu'),
         mask_rate: float = 0.12,
@@ -103,8 +102,7 @@ def fasta2inputs(
     Load a fasta file and
 
     Args:
-        fasta_path: the path to the fasta files
-        output_dir: the path to the output directory
+        fasta_lines: list of lines from a fasta file
         num_pseudo_msa:
         device: the device to move
         mask_rate:
@@ -116,10 +114,8 @@ def fasta2inputs(
     """
     chain_ids: list[str] = []
     aastr: list[str] = []
-    with open(fasta_path, 'r') as file:
-        lines = file.readlines()
     name = False
-    for line in lines:
+    for line in fasta_lines:
         if len(line) == 0:
             continue
         if line.startswith(">") or line.startswith(":"):
@@ -134,16 +130,6 @@ def fasta2inputs(
     combined = sorted(
         list(zip(chain_ids, aastr)), key=lambda x: len(x[1])
     )
-    if output_dir is None:
-        parent = pathlib.Path(fasta_path).parent
-        folder_name = path_leaf(fasta_path).split(".")[0]
-        output_dir = os.path.join(parent, folder_name)
-        os.makedirs(output_dir, exist_ok=True)
-    try:
-        name_max = os.pathconf(output_dir, 'PC_NAME_MAX') - 4
-    except AttributeError:
-        # os.pathconf is UNIX specific. Set to 32 for now.
-        name_max = 32
 
     for i, (ch, fas) in enumerate(combined):
         fas = fas.replace("Z", "E").replace("B", "D").replace("U", "C")
@@ -154,11 +140,6 @@ def fasta2inputs(
         assert torch.all(aatype.ge(0)) and torch.all(aatype.le(21)), \
             f"Only take 0-20 amino acids as inputs with unknown amino acid " \
             f"indexed as 20"
-        if len(ch) < name_max:
-            out_fname = ch.replace(os.path.sep, "-")
-        else:
-            out_fname = f"{i}th chain"
-        out_fname = os.path.join(output_dir, out_fname + ".pdb")
 
         num_res = len(aatype)
         data = list()
@@ -176,7 +157,7 @@ def fasta2inputs(
             p_msa[~p_msa_mask.bool()] = 21
             data.append({"p_msa": p_msa, "p_msa_mask": p_msa_mask})
 
-        yield utils.recursive_to(data, device=device), out_fname
+        yield utils.recursive_to(data, device=device)
 
 
 def save_pdb(
@@ -262,7 +243,7 @@ def _load_weights(
         hub.download_url_to_file(weights_url, weights_file)
     else:
         logging.info(f"Loading weights from {weights_file}")
-
+    print(weights_file)
     return torch.load(weights_file, map_location='cpu')
 
 
@@ -321,25 +302,27 @@ def get_args() -> typing.Tuple[
         by issuing the general command with only model number chosen (1-3).
         """
     )
+    # parser.add_argument(
+    #     'input_file', type=lambda x: os.path.expanduser(str(x)),
+    #     help=
+    #     """
+    #     The input fasta file
+    #     """,
+    #     default="./fasta"
+    # )
+    # parser.add_argument(
+    #     'output_dir', type=lambda x: os.path.expanduser(str(x)),
+    #     help=
+    #     """
+    #     The output directory to write the output pdb files. 
+    #     If the directory does not exist, we just create it. 
+    #     The output file name follows its unique identifier in the 
+    #     rows of the input fasta file"
+    #     """,
+    #     default="./embeddings"
+    # )
     parser.add_argument(
-        'input_file', type=lambda x: os.path.expanduser(str(x)),
-        help=
-        """
-        The input fasta file
-        """
-    )
-    parser.add_argument(
-        'output_dir', type=lambda x: os.path.expanduser(str(x)),
-        help=
-        """
-        The output directory to write the output pdb files. 
-        If the directory does not exist, we just create it. 
-        The output file name follows its unique identifier in the 
-        rows of the input fasta file"
-        """
-    )
-    parser.add_argument(
-        '--num_cycle', default=10, type=int,
+        '--num_cycle', default=1, type=int,
         help="The number of cycles for optimization, default to 10"
     )
     parser.add_argument(
@@ -361,7 +344,7 @@ def get_args() -> typing.Tuple[
     )
     parser.add_argument(
         '--weights_file',
-        default=os.path.expanduser("~/.cache/omegafold_ckpt/model.pt"),
+        default=os.path.expanduser("/data/scratch/peterpaohuang/release1.pt"),
         type=str,
         help='The model cache to run'
     )
@@ -384,18 +367,18 @@ def get_args() -> typing.Tuple[
         help='if allow tf32 for speed if available, default to True'
     )
 
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()
     _set_precision(args.allow_tf32)
 
-    weights_url = args.weights
-    weights_file = args.weights_file
-    # if the output directory is not provided, we will create one alongside the
-    # input fasta file
-    if weights_file or weights_url:
-        weights = _load_weights(weights_url, weights_file)
-        weights = weights.pop('model', weights)
-    else:
-        weights = None
+    # weights_url = args.weights
+    # weights_file = args.weights_file
+    # # if the output directory is not provided, we will create one alongside the
+    # # input fasta file
+    # if weights_file or weights_url:
+    #     weights = _load_weights(weights_url, weights_file)
+    #     weights = weights.pop('model', weights)
+    # else:
+    #     weights = None
 
     forward_config = argparse.Namespace(
         subbatch_size=args.subbatch_size,
@@ -404,7 +387,7 @@ def get_args() -> typing.Tuple[
 
     args.device = _get_device(args.device)
 
-    return args, weights, forward_config
+    return args, forward_config
 
 
 # =============================================================================
